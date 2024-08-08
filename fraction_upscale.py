@@ -12,6 +12,7 @@ import os
 from dask import config as cfg
 from dask_jobqueue import LSFCluster
 import click
+from random import randint
 
 def get_slices(src_arr: zarr.Array,
                    dest_arr: zarr.Array):
@@ -72,10 +73,11 @@ def fractional_reshape(src_arr : zarr.Array,
 
 
 @click.command()
-@click.option('--src','-s',type=click.Path(exists = True), help='Input .zarr file location.')
+@click.option('--src','-s',type=click.Path(exists = True), help='Input .zarr array location.')
 @click.option('--workers','-w',default=100,type=click.INT, help = "Number of dask workers")
 @click.option('--ratio','-w',default="1" ,type=click.STRING, help = "Ratio of input scale to the output scale")
-def cli(src, workers, ratio):
+@click.option('--arr_name','-an',default="" ,type=click.STRING, help = "Name of the output array")
+def cli(src, workers, ratio, arr_name):
     cfg.set({'distributed.scheduler.worker-ttl': None})
     cfg.set({"distributed.comm.retry.count": 10})
     cfg.set({"distributed.comm.timeouts.connect": 30})
@@ -98,12 +100,17 @@ def cli(src, workers, ratio):
     # with open(os.path.join(os.getcwd(), "dask_dashboard_link" + ".txt"), "w") as text_file:
     #     text_file.write(str(client.dashboard_link))
     print(client.dashboard_link)
-
-    zs = zarr.NestedDirectoryStore(src)
+    src_group_path, src_arr_name = os.path.split(src)
+    zs = zarr.NestedDirectoryStore(src_group_path)
     zg = zarr.open(zs, mode = 'a')
-    z_arr_src = zg['s0']
+    z_arr_src = zg[src_arr_name]
+    
+    if arr_name=='':
+        arr_name = f'arr_{randint(0, 1000)}'
+        print(f'Output array name: {arr_name}')
+    
     dest_shape = tuple(int(dim*float(Fraction(ratio))) for dim in z_arr_src.shape)
-    z_arr_dest = zg.require_dataset('upscaled',
+    z_arr_dest = zg.require_dataset(arr_name,
                                         shape=dest_shape, 
                                         dtype=z_arr_src.dtype, 
                                         chunks=z_arr_src.chunks, 
@@ -124,7 +131,7 @@ def cli(src, workers, ratio):
     #         print()
     #         client.retry(f)
 
-    result = wait(futures, timeout = 1000)
+    result = wait(futures)
     
 if __name__ == '__main__':
     cli()
