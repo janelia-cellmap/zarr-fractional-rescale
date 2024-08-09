@@ -13,6 +13,8 @@ from dask import config as cfg
 from dask_jobqueue import LSFCluster
 import click
 from random import randint
+from toolz import partition_all
+import time
 
 def get_slices(src_arr: zarr.Array,
                    dest_arr: zarr.Array):
@@ -61,12 +63,12 @@ def fractional_reshape(src_arr : zarr.Array,
         zoomed_data = ndimage.zoom(src_data, (padding_width_out/padding_width_in, )*3, order=0, mode='nearest')
         out_data = zoomed_data[padding_width_out: -padding_width_out, padding_width_out: -padding_width_out, padding_width_out: -padding_width_out]
         dest_arr[out_slices] = out_data
-        print(src_data.shape, '\n', zoomed_data.shape, '\n', "**************", '\n')
+        #print(src_data.shape, '\n', zoomed_data.shape, '\n', "**************", '\n')
     else:
         src_data = src_arr[input_slices]
         zoomed_data = ndimage.zoom(src_data, (padding_width_out/padding_width_in, )*3, order=0, mode='nearest')
         dest_arr[out_slices] = zoomed_data
-        print(src_data.shape, '\n', zoomed_data.shape, '\n',  "**************", '\n')
+        #print(src_data.shape, '\n', zoomed_data.shape, '\n',  "**************", '\n')
 
 
 
@@ -78,11 +80,12 @@ def fractional_reshape(src_arr : zarr.Array,
 @click.option('--ratio','-w',default="1" ,type=click.STRING, help = "Ratio of input scale to the output scale")
 @click.option('--arr_name','-an',default="" ,type=click.STRING, help = "Name of the output array")
 def cli(src, workers, ratio, arr_name):
-    cfg.set({'distributed.scheduler.worker-ttl': None})
-    cfg.set({"distributed.comm.retry.count": 10})
-    cfg.set({"distributed.comm.timeouts.connect": 30})
-    #cfg.set({"distributed.worker.memory.terminate": False})
-    cfg.set({'distributed.scheduler.allowed-failures': 100})
+    # cfg.set({'distributed.scheduler.worker-ttl': None})
+    # cfg.set({"distributed.comm.retry.count": 10})
+    # cfg.set({"distributed.comm.timeouts.connect": 30})
+    # cfg.set({"distributed.worker.memory.terminate": False})
+    # cfg.set({'distributed.scheduler.allowed-failures': 100})
+    
     # num_cores = 1
     # cluster = LSFCluster(
     #     cores=num_cores,
@@ -109,29 +112,41 @@ def cli(src, workers, ratio, arr_name):
         arr_name = f'arr_{randint(0, 1000)}'
         print(f'Output array name: {arr_name}')
     
+    
+    
+    slab_dest = Fraction(ratio).numerator
+    slab_src = Fraction(ratio).denominator
+    # check how many voxel slabs fit along every dimension of a source array
+    src_arr_slab_count = [int(dim / slab_src) for dim in z_arr_src.shape]
+    
+    # calculate destination array shape and chunks:
+    dest_shape = [slab_dest *  slab_count_dim for slab_count_dim in  src_arr_slab_count] 
+    dest_chunks = [int(dim / slab_src) * slab_dest for dim in z_arr_src.chunks]
+    print(dest_chunks)
+    print(dest_shape)
     dest_shape = tuple(int(dim*float(Fraction(ratio))) for dim in z_arr_src.shape)
     z_arr_dest = zg.require_dataset(arr_name,
                                         shape=dest_shape, 
                                         dtype=z_arr_src.dtype, 
-                                        chunks=z_arr_src.chunks, 
+                                        chunks=dest_chunks, 
                                         compressor=Zstd(level=6),
                                         fill_value=0,
                                         exact=True)
     ratio = [src_dim/dest_dim for src_dim, dest_dim in zip(z_arr_src.shape, z_arr_dest.shape)]
-    print(Fraction(z_arr_src.shape[0],  z_arr_dest.shape[0]).numerator)
-    print(Fraction(z_arr_src.shape[0], z_arr_dest.shape[0]).denominator)
+    print(f'Ratio output/input: {ratio}')
 
     in_slices, out_slices = get_slices(z_arr_src, z_arr_dest)
 
-    futures = client.map(lambda x: fractional_reshape(z_arr_src, z_arr_dest, x), list(zip(in_slices, out_slices)), retries = 4)
-    
-    # for f in futures:
-    #     while f.status != "error":
-    #         print(f.status)
-    #         print()
-    #         client.retry(f)
-
-    result = wait(futures)
+    #break the slices up into batches, to make things easier for the dask scheduler
+    out_slices_partitioned = tuple(partition_all(100000, list(zip(in_slices, out_slices))))
+    for idx, part in enumerate(out_slices_partitioned):
+        print(f'{idx + 1} / {len(out_slices_partitioned)}')
+        start = time.time()
+        
+        futures = client.map(lambda x: fractional_reshape(z_arr_src, z_arr_dest, x), part)
+        result = wait(futures)
+        
+        print(f'Completed {len(part)} tasks in {time.time() - start}s')
     
 if __name__ == '__main__':
     cli()
