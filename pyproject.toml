@@ -11,7 +11,7 @@ dask = "^2024.8.0"
 numcodecs = "^0.13.0"
 numpy = "^2.0.1"
 scipy = "^1.14.0"
-dask-jobqueue = "^0.8.5"
+dask-jobqueue = "0.8.2"
 click = "^8.1.7"
 
 
