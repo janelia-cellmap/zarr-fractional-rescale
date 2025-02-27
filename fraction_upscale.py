@@ -76,11 +76,12 @@ def fractional_reshape(src_arr : zarr.Array,
 
 @click.command()
 @click.option('--src','-s',type=click.Path(exists = True), help='Input .zarr array location.')
+@click.option('--dest','-d',type=click.STRING, help='Output .zarr array location.')
 @click.option('--cluster', '-c', type=click.STRING, help="Dask cluster options: 'local' or 'lsf'")
 @click.option('--workers','-w',default=100,type=click.INT, help = "Number of dask workers")
 @click.option('--ratio','-w',default="1" ,type=click.STRING, help = "Ratio of input scale to the output scale")
 @click.option('--arr_name','-an',default="" ,type=click.STRING, help = "Name of the output array")
-def cli(src, cluster, workers, ratio, arr_name):
+def cli(src, dest, cluster, workers, ratio, arr_name):
     if cluster=='lsf':
         # cfg.set({'distributed.scheduler.worker-ttl': None})
         # cfg.set({"distributed.comm.retry.count": 10})
@@ -100,17 +101,22 @@ def cli(src, cluster, workers, ratio, arr_name):
             )
     elif cluster=='local':
         cluster = LocalCluster()
-        client = Client(cluster)
+    client = Client(cluster)
         
     client.cluster.scale(workers)
     
-    # with open(os.path.join(os.getcwd(), "dask_dashboard_link" + ".txt"), "w") as text_file:
-    #     text_file.write(str(client.dashboard_link))
+    with open(os.path.join(os.getcwd(), "dask_dashboard_link" + ".txt"), "a") as text_file:
+        text_file.write(str(client.dashboard_link))
     print(client.dashboard_link)
     src_group_path, src_arr_name = os.path.split(src)
     zs = zarr.NestedDirectoryStore(src_group_path)
-    zg = zarr.open(zs, mode = 'a')
+    zg = zarr.open(zs, mode = 'r')
     z_arr_src = zg[src_arr_name]
+    
+    
+    zs_dest = zarr.NestedDirectoryStore(dest)
+    zg_dest = zarr.open(zs_dest, mode = 'a')
+    
     
     if arr_name=='':
         arr_name = f'arr_{randint(0, 1000)}'
@@ -129,7 +135,7 @@ def cli(src, cluster, workers, ratio, arr_name):
     print(dest_chunks)
     print(dest_shape)
     dest_shape = tuple(int(dim*float(Fraction(ratio))) for dim in z_arr_src.shape)
-    z_arr_dest = zg.require_dataset(arr_name,
+    z_arr_dest = zg_dest.require_dataset(arr_name,
                                         shape=dest_shape, 
                                         dtype=z_arr_src.dtype, 
                                         chunks=dest_chunks, 
