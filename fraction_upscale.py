@@ -63,13 +63,10 @@ def fractional_reshape(src_arr : zarr.Array,
         zoomed_data = ndimage.zoom(src_data, (padding_width_out/padding_width_in, )*3, order=0, mode='nearest')
         out_data = zoomed_data[padding_width_out: -padding_width_out, padding_width_out: -padding_width_out, padding_width_out: -padding_width_out]
         dest_arr[out_slices] = out_data
-        #print(src_data.shape, '\n', zoomed_data.shape, '\n', "**************", '\n')
     else:
         src_data = src_arr[input_slices]
         zoomed_data = ndimage.zoom(src_data, (padding_width_out/padding_width_in, )*3, order=0, mode='nearest')
         dest_arr[out_slices] = zoomed_data
-        #print(src_data.shape, '\n', zoomed_data.shape, '\n',  "**************", '\n')
-
 
 
 
