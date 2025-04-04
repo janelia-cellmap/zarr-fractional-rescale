@@ -23,8 +23,7 @@ def get_slices(src_arr: zarr.Array,
 
     # check how many pixel_slabs are approximately in one chunk:
     chunk_shape = src_arr.chunks
-    slices_dims = [int(dim / slab_count_in) * slab_count_in for dim in chunk_shape]
-
+    slices_dims = [int(dim / slab_count_in) * slab_count_in  if dim > slab_count_in else slab_count_in for dim in chunk_shape ]
     # calculate input slices
     in_slices = slices_from_chunks(normalize_chunks(slices_dims, shape = src_arr.shape))
 
