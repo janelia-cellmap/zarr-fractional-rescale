@@ -105,9 +105,8 @@ def cli(src, dest, cluster, workers, ratio, arr_name):
     with open(os.path.join(os.getcwd(), "dask_dashboard_link" + ".txt"), "a") as text_file:
         text_file.write(str(client.dashboard_link))
     print(client.dashboard_link)
-    src_group_path, src_arr_name = os.path.split(src)
-    zs = zarr.NestedDirectoryStore(src_group_path)
-    zg = zarr.open(zs, mode = 'r')
+    src_group_path, src_arr_name = os.path.split(src)    
+    zg = zarr.open(src_group_path, mode = 'r')
     z_arr_src = zg[src_arr_name]
     
     
