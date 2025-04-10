@@ -51,25 +51,38 @@ def fractional_reshape(src_arr : zarr.Array,
     padding_width_out = slab_dest
     # construct input/output array 
     
-    src_shape = tuple( (sl.stop - sl.start) + padding_width_in * 2 for sl in input_slices)
-    dest_shape = tuple( (sl.stop - sl.start) + padding_width_out * 2 for sl in out_slices)
-    src_data = np.empty(shape= src_shape, dtype=src_arr.dtype)
+    src_sl_shape = tuple( (sl.stop - sl.start) + padding_width_in * 2 for sl in input_slices)
+    dest_sl_shape = tuple( (sl.stop - sl.start) + padding_width_out * 2 for sl in out_slices)
+    src_data = np.empty(shape= src_sl_shape, dtype=src_arr.dtype)
     
     #upsampling
     block_start_idxs= [False if sl.start==0 or sl.stop==sh else True for sl, sh in zip(input_slices, src_arr.shape)]
     if all(block_start_idxs):
         src_slices = tuple(slice(sl.start - padding_width_in, sl.stop + padding_width_in, None) for sl in input_slices)
         src_data = src_arr[src_slices]
-        zoomed_data = ndimage.zoom(src_data, (padding_width_out/padding_width_in, )*3, order=0, mode='nearest')
+        zoomed_data = ndimage.zoom(src_data, (slab_dest/slab_src, )*3, order=0, mode='nearest')
         out_data = zoomed_data[padding_width_out: -padding_width_out, padding_width_out: -padding_width_out, padding_width_out: -padding_width_out]
         dest_arr[out_slices] = out_data
     else:
         src_data = src_arr[input_slices]
-        zoomed_data = ndimage.zoom(src_data, (padding_width_out/padding_width_in, )*3, order=0, mode='nearest')
-        #TO DO: fix padding of the output array
-        # padding_matrix = 
-        # out_data  = 
-        dest_arr[out_slices] = zoomed_data
+        zoomed_data = ndimage.zoom(src_data, (slab_dest/slab_src, )*3, order=0, mode='nearest')
+        
+        # Figure out in which dimension (zoomed_data shape) != (chunksize shape)
+        padding = [not ((sl.stop - sl.start) == zoomed_dim) for sl,zoomed_dim in zip(out_slices, zoomed_data.shape)]
+        
+        # get the part of the zoomed data that has the same dimensions as out_slices
+        zoomed_data_slicing = []            
+        for padding_bool, out_slice, zoomed_dim in zip(padding, out_slices, zoomed_data.shape):
+            out_slice_dim = out_slice.stop - out_slice.start
+            if padding_bool:
+                    diff = zoomed_dim - out_slice_dim
+                    zoomed_data_slicing.append(slice(0, zoomed_dim - diff, None))                        
+            else:
+                zoomed_data_slicing.append(slice(0, out_slice_dim, None))
+                
+        out_data  = zoomed_data[tuple(zoomed_data_slicing)]
+        dest_arr[out_slices] = out_data
+        
 
 
 
