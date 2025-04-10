@@ -17,16 +17,16 @@ from toolz import partition_all
 import time
 
 def get_slices(src_arr: zarr.Array,
-                   dest_arr: zarr.Array):
-    slab_count_in = Fraction(src_arr.shape[0], dest_arr.shape[0]).numerator
-    slab_count_out = Fraction(src_arr.shape[0], dest_arr.shape[0]).denominator
-
+                   slab_src: int,
+                   slab_dest: int):
+    slab_count_in = slab_src
+    slab_count_out = slab_dest
     # check how many pixel_slabs are approximately in one chunk:
     chunk_shape = src_arr.chunks
-    slices_dims = [int(dim / slab_count_in) * slab_count_in  if dim > slab_count_in else slab_count_in for dim in chunk_shape ]
+    slices_dims = [int(dim / slab_count_in) * slab_count_in for dim in chunk_shape]
+
     # calculate input slices
     in_slices = slices_from_chunks(normalize_chunks(slices_dims, shape = src_arr.shape))
-
     # caclulate output slices
     out_slices = []
     for slice_voxel_in in in_slices:
@@ -40,19 +40,20 @@ def get_slices(src_arr: zarr.Array,
 
 def fractional_reshape(src_arr : zarr.Array,
                        dest_arr : zarr.Array,
+                        slab_src: int,
+                   slab_dest: int,
                        slices_map : Tuple[Tuple[slice, ...]]
                       ):
     input_slices = slices_map[0]
     out_slices = slices_map[1]
 
-    padding_width_in = Fraction(src_arr.shape[0], dest_arr.shape[0]).numerator
-    padding_width_out = Fraction(src_arr.shape[0], dest_arr.shape[0]).denominator
+    padding_width_in = slab_src
+    padding_width_out = slab_dest
     # construct input/output array 
     
     src_shape = tuple( (sl.stop - sl.start) + padding_width_in * 2 for sl in input_slices)
     dest_shape = tuple( (sl.stop - sl.start) + padding_width_out * 2 for sl in out_slices)
     src_data = np.empty(shape= src_shape, dtype=src_arr.dtype)
-    dest_data = np.empty(shape= dest_shape, dtype= dest_arr.dtype)   
     
     #upsampling
     block_start_idxs= [False if sl.start==0 or sl.stop==sh else True for sl, sh in zip(input_slices, src_arr.shape)]
@@ -65,7 +66,11 @@ def fractional_reshape(src_arr : zarr.Array,
     else:
         src_data = src_arr[input_slices]
         zoomed_data = ndimage.zoom(src_data, (padding_width_out/padding_width_in, )*3, order=0, mode='nearest')
+        #TO DO: fix padding of the output array
+        # padding_matrix = 
+        # out_data  = 
         dest_arr[out_slices] = zoomed_data
+
 
 
 
@@ -101,35 +106,36 @@ def cli(src, dest, cluster, workers, ratio, arr_name):
         
     client.cluster.scale(workers)
     
-    with open(os.path.join(os.getcwd(), "dask_dashboard_link" + ".txt"), "a") as text_file:
-        text_file.write(str(client.dashboard_link))
+    # with open(os.path.join(os.getcwd(), "dask_dashboard_link" + ".txt"), "w") as text_file:
+    #     text_file.write(str(client.dashboard_link))
     print(client.dashboard_link)
-    src_group_path, src_arr_name = os.path.split(src)    
+    src_group_path, src_arr_name = os.path.split(src)
+
     zg = zarr.open(src_group_path, mode = 'r')
     z_arr_src = zg[src_arr_name]
-    
     
     zs_dest = zarr.NestedDirectoryStore(dest)
     zg_dest = zarr.open(zs_dest, mode = 'a')
     
-    
     if arr_name=='':
         arr_name = f'arr_{randint(0, 1000)}'
         print(f'Output array name: {arr_name}')
-    
-    
-    
+        
+        
+        
     slab_dest = Fraction(ratio).numerator
     slab_src = Fraction(ratio).denominator
-    # check how many voxel slabs fit along every dimension of a source array
-    src_arr_slab_count = [int(dim / slab_src) for dim in z_arr_src.shape]
+
     
     # calculate destination array shape and chunks:
-    dest_shape = [slab_dest *  slab_count_dim for slab_count_dim in  src_arr_slab_count] 
     dest_chunks = [int(dim / slab_src) * slab_dest for dim in z_arr_src.chunks]
+    
+    in_slices, out_slices = get_slices(z_arr_src, slab_src, slab_dest)
+    dest_shape = tuple(dim_slice.stop for dim_slice in out_slices[-1])
+    
     print(dest_chunks)
     print(dest_shape)
-    dest_shape = tuple(int(dim*float(Fraction(ratio))) for dim in z_arr_src.shape)
+
     z_arr_dest = zg_dest.require_dataset(arr_name,
                                         shape=dest_shape, 
                                         dtype=z_arr_src.dtype, 
@@ -140,15 +146,14 @@ def cli(src, dest, cluster, workers, ratio, arr_name):
     ratio = [src_dim/dest_dim for src_dim, dest_dim in zip(z_arr_src.shape, z_arr_dest.shape)]
     print(f'Ratio output/input: {ratio}')
 
-    in_slices, out_slices = get_slices(z_arr_src, z_arr_dest)
-
+    
     #break the slices up into batches, to make things easier for the dask scheduler
     out_slices_partitioned = tuple(partition_all(100000, list(zip(in_slices, out_slices))))
     for idx, part in enumerate(out_slices_partitioned):
         print(f'{idx + 1} / {len(out_slices_partitioned)}')
         start = time.time()
         
-        futures = client.map(lambda x: fractional_reshape(z_arr_src, z_arr_dest, x), part)
+        futures = client.map(lambda x: fractional_reshape(z_arr_src, z_arr_dest, slab_src,  slab_dest, x), part)
         result = wait(futures)
         
         print(f'Completed {len(part)} tasks in {time.time() - start}s')
