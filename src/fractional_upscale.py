@@ -94,10 +94,11 @@ def fractional_reshape(src_arr : zarr.Array,
 @click.option('--dest','-d',type=click.STRING, help='Output .zarr array location.')
 @click.option('--cluster', '-c', type=click.STRING, help="Dask cluster options: 'local' or 'lsf'")
 @click.option('--workers','-w',default=100,type=click.INT, help = "Number of dask workers")
-@click.option('--ratio','-w',default="1" ,type=click.STRING, help = "Ratio of input scale to the output scale")
+@click.option('--input_scale','-is',default="1" ,type=click.INT, help = "Physical voxel size (in nm) of the input array the needs to be rescaled")
+@click.option('--output_scale','-os',default="1" ,type=click.INT, help = "Physical voxel size (in nm) of the output rescaled array")
 @click.option('--arr_name','-an',default="" ,type=click.STRING, help = "Name of the output array")
-@click.option('--interpolation_order', '-i', default=3, type=click.INT, help="The order of the spline interpolation, default is 3. The order has to be in the range 0-5.")
-def cli(src, dest, cluster, workers, ratio, arr_name, interpolation_order):
+@click.option('--interpolation_order', '-io', default=3, type=click.INT, help="The order of the spline interpolation, default is 3. The order has to be in the range 0-5.")
+def cli(src, dest, cluster, workers, input_scale, output_scale, arr_name, interpolation_order):
     if cluster=='lsf':
         # cfg.set({'distributed.scheduler.worker-ttl': None})
         # cfg.set({"distributed.comm.retry.count": 10})
@@ -137,10 +138,9 @@ def cli(src, dest, cluster, workers, ratio, arr_name, interpolation_order):
         print(f'Output array name: {arr_name}')
         
         
-        
-    slab_dest = Fraction(ratio).numerator
-    slab_src = Fraction(ratio).denominator
-
+    ratio = Fraction(str(input_scale)) / Fraction(str(output_scale))
+    slab_dest = ratio.numerator
+    slab_src = ratio.denominator
     
     # calculate destination array shape and chunks:
     dest_chunks = [int(dim / slab_src) * slab_dest for dim in z_arr_src.chunks]
@@ -158,9 +158,7 @@ def cli(src, dest, cluster, workers, ratio, arr_name, interpolation_order):
                                         compressor=Zstd(level=6),
                                         fill_value=0,
                                         exact=True)
-    ratio = [src_dim/dest_dim for src_dim, dest_dim in zip(z_arr_src.shape, z_arr_dest.shape)]
-    print(f'Ratio output/input: {ratio}')
-
+    
     
     #break the slices up into batches, to make things easier for the dask scheduler
     out_slices_partitioned = tuple(partition_all(100000, list(zip(in_slices, out_slices))))
