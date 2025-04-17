@@ -94,8 +94,8 @@ def fractional_reshape(src_arr : zarr.Array,
 @click.option('--dest','-d',type=click.STRING, help='Output .zarr array location.')
 @click.option('--cluster', '-c', type=click.STRING, help="Dask cluster options: 'local' or 'lsf'")
 @click.option('--workers','-w',default=100,type=click.INT, help = "Number of dask workers")
-@click.option('--input_scale','-is',default="1" ,type=click.INT, help = "Physical voxel size (in nm) of the input array the needs to be rescaled")
-@click.option('--output_scale','-os',default="1" ,type=click.INT, help = "Physical voxel size (in nm) of the output rescaled array")
+@click.option('--input_scale','-is',default="1" ,type=click.INT, help = "Physical voxel size (integer) of the input array the needs to be rescaled")
+@click.option('--output_scale','-os',default="1" ,type=click.INT, help = "Physical voxel size (integer) of the output rescaled array")
 @click.option('--arr_name','-an',default="" ,type=click.STRING, help = "Name of the output array")
 @click.option('--interpolation_order', '-io', default=3, type=click.INT, help="The order of the spline interpolation, default is 3. The order has to be in the range 0-5.")
 def cli(src, dest, cluster, workers, input_scale, output_scale, arr_name, interpolation_order):
