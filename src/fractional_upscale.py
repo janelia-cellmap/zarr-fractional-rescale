@@ -42,15 +42,16 @@ def fractional_reshape(src_arr : zarr.Array,
                        dest_arr : zarr.Array,
                         slab_src: int,
                    slab_dest: int,
-                       slices_map : Tuple[Tuple[slice, ...]]
+                       slices_map : Tuple[Tuple[slice, ...]],
+                       interpolation_order : int
                       ):
     input_slices = slices_map[0]
     out_slices = slices_map[1]
 
     padding_width_in = slab_src
     padding_width_out = slab_dest
-    # construct input/output array 
     
+    # construct input/output array 
     src_sl_shape = tuple( (sl.stop - sl.start) + padding_width_in * 2 for sl in input_slices)
     dest_sl_shape = tuple( (sl.stop - sl.start) + padding_width_out * 2 for sl in out_slices)
     src_data = np.empty(shape= src_sl_shape, dtype=src_arr.dtype)
@@ -60,12 +61,12 @@ def fractional_reshape(src_arr : zarr.Array,
     if all(block_start_idxs):
         src_slices = tuple(slice(sl.start - padding_width_in, sl.stop + padding_width_in, None) for sl in input_slices)
         src_data = src_arr[src_slices]
-        zoomed_data = ndimage.zoom(src_data, (slab_dest/slab_src, )*3, order=0, mode='nearest')
+        zoomed_data = ndimage.zoom(src_data, (slab_dest/slab_src, )*3, order=interpolation_order, mode='nearest')
         out_data = zoomed_data[padding_width_out: -padding_width_out, padding_width_out: -padding_width_out, padding_width_out: -padding_width_out]
         dest_arr[out_slices] = out_data
     else:
         src_data = src_arr[input_slices]
-        zoomed_data = ndimage.zoom(src_data, (slab_dest/slab_src, )*3, order=0, mode='nearest')
+        zoomed_data = ndimage.zoom(src_data, (slab_dest/slab_src, )*3, order=interpolation_order, mode='nearest')
         
         # Figure out in which dimension (zoomed_data shape) != (chunksize shape)
         padding = [not ((sl.stop - sl.start) == zoomed_dim) for sl,zoomed_dim in zip(out_slices, zoomed_data.shape)]
@@ -93,9 +94,11 @@ def fractional_reshape(src_arr : zarr.Array,
 @click.option('--dest','-d',type=click.STRING, help='Output .zarr array location.')
 @click.option('--cluster', '-c', type=click.STRING, help="Dask cluster options: 'local' or 'lsf'")
 @click.option('--workers','-w',default=100,type=click.INT, help = "Number of dask workers")
-@click.option('--ratio','-w',default="1" ,type=click.STRING, help = "Ratio of input scale to the output scale")
+@click.option('--input_scale','-is',default="1" ,type=click.INT, help = "Physical voxel size (integer) of the input array the needs to be rescaled")
+@click.option('--output_scale','-os',default="1" ,type=click.INT, help = "Physical voxel size (integer) of the output rescaled array")
 @click.option('--arr_name','-an',default="" ,type=click.STRING, help = "Name of the output array")
-def cli(src, dest, cluster, workers, ratio, arr_name):
+@click.option('--interpolation_order', '-io', default=3, type=click.INT, help="The order of the spline interpolation, default is 3. The order has to be in the range 0-5.")
+def cli(src, dest, cluster, workers, input_scale, output_scale, arr_name, interpolation_order):
     if cluster=='lsf':
         # cfg.set({'distributed.scheduler.worker-ttl': None})
         # cfg.set({"distributed.comm.retry.count": 10})
@@ -135,10 +138,9 @@ def cli(src, dest, cluster, workers, ratio, arr_name):
         print(f'Output array name: {arr_name}')
         
         
-        
-    slab_dest = Fraction(ratio).numerator
-    slab_src = Fraction(ratio).denominator
-
+    ratio = Fraction(str(input_scale)) / Fraction(str(output_scale))
+    slab_dest = ratio.numerator
+    slab_src = ratio.denominator
     
     # calculate destination array shape and chunks:
     dest_chunks = [int(dim / slab_src) * slab_dest for dim in z_arr_src.chunks]
@@ -156,9 +158,7 @@ def cli(src, dest, cluster, workers, ratio, arr_name):
                                         compressor=Zstd(level=6),
                                         fill_value=0,
                                         exact=True)
-    ratio = [src_dim/dest_dim for src_dim, dest_dim in zip(z_arr_src.shape, z_arr_dest.shape)]
-    print(f'Ratio output/input: {ratio}')
-
+    
     
     #break the slices up into batches, to make things easier for the dask scheduler
     out_slices_partitioned = tuple(partition_all(100000, list(zip(in_slices, out_slices))))
@@ -166,7 +166,7 @@ def cli(src, dest, cluster, workers, ratio, arr_name):
         print(f'{idx + 1} / {len(out_slices_partitioned)}')
         start = time.time()
         
-        futures = client.map(lambda x: fractional_reshape(z_arr_src, z_arr_dest, slab_src,  slab_dest, x), part)
+        futures = client.map(lambda x: fractional_reshape(z_arr_src, z_arr_dest, slab_src,  slab_dest, x, interpolation_order), part)
         result = wait(futures)
         
         print(f'Completed {len(part)} tasks in {time.time() - start}s')
