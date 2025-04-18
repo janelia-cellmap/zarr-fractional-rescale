@@ -15,6 +15,8 @@ import click
 from random import randint
 from toolz import partition_all
 import time
+from cellmap_utils import get_multiscale_metadata
+import pint
 
 def get_slices(src_arr: zarr.Array,
                    slab_src: int,
@@ -94,11 +96,11 @@ def fractional_reshape(src_arr : zarr.Array,
 @click.option('--dest','-d',type=click.STRING, help='Output .zarr array location.')
 @click.option('--cluster', '-c', type=click.STRING, help="Dask cluster options: 'local' or 'lsf'")
 @click.option('--workers','-w',default=100,type=click.INT, help = "Number of dask workers")
-@click.option('--input_scale','-is',default="1" ,type=click.INT, help = "Physical voxel size (integer) of the input array the needs to be rescaled")
-@click.option('--output_scale','-os',default="1" ,type=click.INT, help = "Physical voxel size (integer) of the output rescaled array")
-@click.option('--arr_name','-an',default="" ,type=click.STRING, help = "Name of the output array")
+@click.option('--input_scale','-is',default="1" ,type=click.STRING, help = "Physical voxel size (integer) of the input array the needs to be rescaled")
+@click.option('--output_scale','-os',default="1" ,type=click.STRING, help = "Physical voxel size (integer) of the output rescaled array")
+@click.option('--dataset_name','-an',default="" ,type=click.STRING, help = "Name of the output array")
 @click.option('--interpolation_order', '-io', default=3, type=click.INT, help="The order of the spline interpolation, default is 3. The order has to be in the range 0-5.")
-def cli(src, dest, cluster, workers, input_scale, output_scale, arr_name, interpolation_order):
+def cli(src, dest, cluster, workers, input_scale, output_scale, dataset_name, interpolation_order):
     if cluster=='lsf':
         # cfg.set({'distributed.scheduler.worker-ttl': None})
         # cfg.set({"distributed.comm.retry.count": 10})
@@ -133,12 +135,15 @@ def cli(src, dest, cluster, workers, input_scale, output_scale, arr_name, interp
     zs_dest = zarr.NestedDirectoryStore(dest)
     zg_dest = zarr.open(zs_dest, mode = 'a')
     
-    if arr_name=='':
-        arr_name = f'arr_{randint(0, 1000)}'
-        print(f'Output array name: {arr_name}')
-        
-        
-    ratio = Fraction(str(input_scale)) / Fraction(str(output_scale))
+    if dataset_name=='':
+        dataset_name = f'dataset_{randint(0, 1000)}'
+        print(f'Output dataset name: {dataset_name}')
+    
+    ureg = pint.UnitRegistry()
+    input = ureg.Quantity(input_scale)
+    output = ureg.Quantity(output_scale)
+                
+    ratio = Fraction(str(int(round(input.to('nanometer').magnitude)))) / Fraction(str(int(round(output.to('nanometer').magnitude))))
     slab_dest = ratio.numerator
     slab_src = ratio.denominator
     
@@ -150,8 +155,8 @@ def cli(src, dest, cluster, workers, input_scale, output_scale, arr_name, interp
     
     print(dest_chunks)
     print(dest_shape)
-
-    z_arr_dest = zg_dest.require_dataset(arr_name,
+    zg_dest.require_group(dataset_name, overwrite=False)
+    z_arr_dest = zg_dest[dataset_name].require_dataset('s0',
                                         shape=dest_shape, 
                                         dtype=z_arr_src.dtype, 
                                         chunks=dest_chunks, 
@@ -170,6 +175,9 @@ def cli(src, dest, cluster, workers, input_scale, output_scale, arr_name, interp
         result = wait(futures)
         
         print(f'Completed {len(part)} tasks in {time.time() - start}s')
+
+    #write ome-ngff metadata into .zattrs in the dataset group
+    zg_dest[dataset_name].attrs['multiscales'] = get_multiscale_metadata([float(output.magnitude),]*3, [0.0,]*3, 0, str(output.units), name=dataset_name)['multiscales']
     
 if __name__ == '__main__':
     cli()
