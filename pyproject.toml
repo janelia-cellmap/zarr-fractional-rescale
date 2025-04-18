@@ -13,6 +13,8 @@ numpy = "^2.0.1"
 scipy = "^1.14.0"
 dask-jobqueue = "0.8.2"
 click = "^8.1.7"
+pint = "^0.24.4"
+cellmap-utils = "0.0.31"
 
 
 [build-system]
