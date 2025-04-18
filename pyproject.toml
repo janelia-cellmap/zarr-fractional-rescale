@@ -15,6 +15,7 @@ dask-jobqueue = "0.8.2"
 click = "^8.1.7"
 pint = "^0.24.4"
 cellmap-utils = "0.0.31"
+bokeh = "^3.7.2"
 
 
 [build-system]
