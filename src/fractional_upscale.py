@@ -88,9 +88,6 @@ def fractional_reshape(src_arr : zarr.Array,
         
 
 
-
-
-
 @click.command()
 @click.option('--src','-s',type=click.Path(exists = True), help='Input .zarr array location.')
 @click.option('--dest','-d',type=click.STRING, help='Output .zarr array location.')
@@ -100,7 +97,8 @@ def fractional_reshape(src_arr : zarr.Array,
 @click.option('--output_scale','-os',default="1" ,type=click.STRING, help = "Physical voxel size (integer) of the output rescaled array")
 @click.option('--dataset_name','-an',default="" ,type=click.STRING, help = "Name of the output array")
 @click.option('--interpolation_order', '-io', default=3, type=click.INT, help="The order of the spline interpolation, default is 3. The order has to be in the range 0-5.")
-def cli(src, dest, cluster, workers, input_scale, output_scale, dataset_name, interpolation_order):
+@click.option('--ome_zarr', '-ome', is_flag=True, type=click.BOOL, help="Store rescaled array as an ome-ngff dataset with multiscale schema if flag is present. Otherwise, store as a zarr array")
+def cli(src, dest, cluster, workers, input_scale, output_scale, dataset_name, interpolation_order, ome_zarr):
     if cluster=='lsf':
         # cfg.set({'distributed.scheduler.worker-ttl': None})
         # cfg.set({"distributed.comm.retry.count": 10})
@@ -133,7 +131,7 @@ def cli(src, dest, cluster, workers, input_scale, output_scale, dataset_name, in
     z_arr_src = zg[src_arr_name]
     
     zs_dest = zarr.NestedDirectoryStore(dest)
-    zg_dest = zarr.open(zs_dest, mode = 'a')
+    zg_dest_root = zarr.open(zs_dest, mode = 'a')
     
     if dataset_name=='':
         dataset_name = f'dataset_{randint(0, 1000)}'
@@ -155,8 +153,20 @@ def cli(src, dest, cluster, workers, input_scale, output_scale, dataset_name, in
     
     print(dest_chunks)
     print(dest_shape)
-    zg_dest.require_group(dataset_name, overwrite=False)
-    z_arr_dest = zg_dest[dataset_name].require_dataset('s0',
+    
+    if ome_zarr:
+        arr_name  = 's0'
+        zg_dest_root.require_group(dataset_name, overwrite=False)
+        zg_dest = zg_dest_root[dataset_name]
+        
+        #write ome-ngff metadata into .zattrs in the dataset group
+        zg_dest.attrs['multiscales'] = get_multiscale_metadata([float(output.magnitude),]*3, [0.0,]*3, 0, str(output.units), name=dataset_name)['multiscales']
+    
+    else:
+        arr_name = dataset_name
+        zg_dest = zg_dest_root
+        
+    z_arr_dest = zg_dest.require_dataset(arr_name,
                                         shape=dest_shape, 
                                         dtype=z_arr_src.dtype, 
                                         chunks=dest_chunks, 
@@ -176,8 +186,5 @@ def cli(src, dest, cluster, workers, input_scale, output_scale, dataset_name, in
         
         print(f'Completed {len(part)} tasks in {time.time() - start}s')
 
-    #write ome-ngff metadata into .zattrs in the dataset group
-    zg_dest[dataset_name].attrs['multiscales'] = get_multiscale_metadata([float(output.magnitude),]*3, [0.0,]*3, 0, str(output.units), name=dataset_name)['multiscales']
-    
 if __name__ == '__main__':
     cli()
