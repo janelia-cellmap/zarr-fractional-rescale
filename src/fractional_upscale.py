@@ -4,7 +4,7 @@ from dask.array.core import slices_from_chunks, normalize_chunks
 from numcodecs import Zstd
 from math import lcm
 from fractions import Fraction
-from typing import Literal, Tuple, Union
+from typing import Tuple  
 import numpy as np
 import  scipy.ndimage as ndimage
 import dask.array as da
@@ -17,6 +17,7 @@ from toolz import partition_all
 import time
 from cellmap_utils import get_multiscale_metadata
 import pint
+import logging 
 
 def get_slices(src_arr: zarr.Array,
                    slab_src: int,
@@ -88,9 +89,6 @@ def fractional_reshape(src_arr : zarr.Array,
         
 
 
-
-
-
 @click.command()
 @click.option('--src','-s',type=click.Path(exists = True), help='Input .zarr array location.')
 @click.option('--dest','-d',type=click.STRING, help='Output .zarr array location.')
@@ -100,7 +98,12 @@ def fractional_reshape(src_arr : zarr.Array,
 @click.option('--output_scale','-os',default="1" ,type=click.STRING, help = "Physical voxel size (integer) of the output rescaled array")
 @click.option('--dataset_name','-an',default="" ,type=click.STRING, help = "Name of the output array")
 @click.option('--interpolation_order', '-io', default=3, type=click.INT, help="The order of the spline interpolation, default is 3. The order has to be in the range 0-5.")
-def cli(src, dest, cluster, workers, input_scale, output_scale, dataset_name, interpolation_order):
+@click.option('--ome_zarr', '-ome', is_flag=True, type=click.BOOL, help="Store rescaled array as an ome-ngff dataset with multiscale schema if flag is present. Otherwise, store as a zarr array")
+def cli(src, dest, cluster, workers, input_scale, output_scale, dataset_name, interpolation_order, ome_zarr):
+    
+    logging.basicConfig(level=logging.INFO, 
+                         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
     if cluster=='lsf':
         # cfg.set({'distributed.scheduler.worker-ttl': None})
         # cfg.set({"distributed.comm.retry.count": 10})
@@ -126,18 +129,18 @@ def cli(src, dest, cluster, workers, input_scale, output_scale, dataset_name, in
     
     # with open(os.path.join(os.getcwd(), "dask_dashboard_link" + ".txt"), "w") as text_file:
     #     text_file.write(str(client.dashboard_link))
-    print(client.dashboard_link)
+    logging.info(f'dask dashboard link: {client.dashboard_link}')
     src_group_path, src_arr_name = os.path.split(src)
 
     zg = zarr.open(src_group_path, mode = 'r')
     z_arr_src = zg[src_arr_name]
     
     zs_dest = zarr.NestedDirectoryStore(dest)
-    zg_dest = zarr.open(zs_dest, mode = 'a')
+    zg_dest_root = zarr.open(zs_dest, mode = 'a')
     
     if dataset_name=='':
         dataset_name = f'dataset_{randint(0, 1000)}'
-        print(f'Output dataset name: {dataset_name}')
+        logging.info(f'Output dataset name: {dataset_name}')
     
     ureg = pint.UnitRegistry()
     input = ureg.Quantity(input_scale)
@@ -153,10 +156,22 @@ def cli(src, dest, cluster, workers, input_scale, output_scale, dataset_name, in
     in_slices, out_slices = get_slices(z_arr_src, slab_src, slab_dest)
     dest_shape = tuple(dim_slice.stop for dim_slice in out_slices[-1])
     
-    print(dest_chunks)
-    print(dest_shape)
-    zg_dest.require_group(dataset_name, overwrite=False)
-    z_arr_dest = zg_dest[dataset_name].require_dataset('s0',
+    logging.info(f'rescaled array chunk shape: {dest_chunks}')
+    logging.info(f'rescaled array shape: {dest_shape}')
+    
+    if ome_zarr:
+        arr_name  = 's0'
+        zg_dest_root.require_group(dataset_name, overwrite=False)
+        zg_dest = zg_dest_root[dataset_name]
+        
+        #write ome-ngff metadata into .zattrs in the dataset group
+        zg_dest.attrs['multiscales'] = get_multiscale_metadata([float(output.magnitude),]*3, [0.0,]*3, 0, str(output.units), name=dataset_name)['multiscales']
+    
+    else:
+        arr_name = dataset_name
+        zg_dest = zg_dest_root
+        
+    z_arr_dest = zg_dest.require_dataset(arr_name,
                                         shape=dest_shape, 
                                         dtype=z_arr_src.dtype, 
                                         chunks=dest_chunks, 
@@ -164,20 +179,15 @@ def cli(src, dest, cluster, workers, input_scale, output_scale, dataset_name, in
                                         fill_value=0,
                                         exact=True)
     
-    
     #break the slices up into batches, to make things easier for the dask scheduler
     out_slices_partitioned = tuple(partition_all(100000, list(zip(in_slices, out_slices))))
     for idx, part in enumerate(out_slices_partitioned):
-        print(f'{idx + 1} / {len(out_slices_partitioned)}')
         start = time.time()
         
         futures = client.map(lambda x: fractional_reshape(z_arr_src, z_arr_dest, slab_src,  slab_dest, x, interpolation_order), part)
         result = wait(futures)
         
-        print(f'Completed {len(part)} tasks in {time.time() - start}s')
+        logging.info(f'Completed {len(part)} tasks in {time.time() - start}s')
 
-    #write ome-ngff metadata into .zattrs in the dataset group
-    zg_dest[dataset_name].attrs['multiscales'] = get_multiscale_metadata([float(output.magnitude),]*3, [0.0,]*3, 0, str(output.units), name=dataset_name)['multiscales']
-    
 if __name__ == '__main__':
     cli()
