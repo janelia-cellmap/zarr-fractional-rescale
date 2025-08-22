@@ -151,7 +151,12 @@ def cli(src, dest, cluster, workers, input_scale, output_scale, dataset_name, in
     slab_src = ratio.denominator
     
     # calculate destination array shape and chunks:
-    dest_chunks = [int(dim / slab_src) * slab_dest for dim in z_arr_src.chunks]
+    # when downsampling:
+    if ratio < 1:
+        dest_chunks = [int(dim / slab_src) * slab_dest for dim in z_arr_src.chunks]
+    else:
+        # TODO: proper chunkshape for upsampling, otherwise it would scale chunks by 'ratio' factor
+        dest_chunks = z_arr_src.chunks
     
     in_slices, out_slices = get_slices(z_arr_src, slab_src, slab_dest)
     dest_shape = tuple(dim_slice.stop for dim_slice in out_slices[-1])
