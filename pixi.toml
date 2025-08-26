@@ -1,0 +1,25 @@
+[project]
+name = "zarr-fractional-upscale"
+version = "0.1.0"
+description = ""
+authors = ["Yurii Zubov <zubov452@gmail.com>"]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = ">=3.11"
+dask = ">=2024.8.0"
+numcodecs = ">=0.13.0"
+numpy = ">=2.0.1"
+scipy = ">=1.14.0"
+click = ">=8.1.7"
+pint = ">=0.24.4"
+bokeh = ">=3.7.2"
+zarr = ">=2.18.7"
+
+[pypi-dependencies]
+dask-jobqueue = "==0.8.2"
+cellmap-utils = "==0.0.31"
+
+[tasks]
+run = "python src/fractional_upscale.py"
