@@ -99,18 +99,23 @@ def fractional_reshape(src_arr : zarr.Array,
 @click.option('--dataset_name','-an',default="" ,type=click.STRING, help = "Name of the output array")
 @click.option('--interpolation_order', '-io', default=3, type=click.INT, help="The order of the spline interpolation, default is 3. The order has to be in the range 0-5.")
 @click.option('--ome_zarr', '-ome', is_flag=True, type=click.BOOL, help="Store rescaled array as an ome-ngff dataset with multiscale schema if flag is present. Otherwise, store as a zarr array")
-def cli(src, dest, cluster, workers, input_scale, output_scale, dataset_name, interpolation_order, ome_zarr):
+@click.option('--dask_log_dir','-l', type=click.STRING, help="The path of the parent directory for all LSF worker logs.  Omit if you want worker logs to be emailed to you.")
+def cli(src,
+        dest,
+        cluster,
+        workers,
+        input_scale,
+        output_scale,
+        dataset_name,
+        interpolation_order,
+        ome_zarr,
+        dask_log_dir
+        ):
     
     logging.basicConfig(level=logging.INFO, 
                          format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
-    if cluster=='lsf':
-        # cfg.set({'distributed.scheduler.worker-ttl': None})
-        # cfg.set({"distributed.comm.retry.count": 10})
-        # cfg.set({"distributed.comm.timeouts.connect": 30})
-        # cfg.set({"distributed.worker.memory.terminate": False})
-        # cfg.set({'distributed.scheduler.allowed-failures': 100})
-        
+    if cluster=='lsf':        
         num_cores = 1
         cluster = LSFCluster(
             cores=num_cores,
@@ -119,12 +124,12 @@ def cli(src, dest, cluster, workers, input_scale, output_scale, dataset_name, in
             ncpus=num_cores,
             mem=15 * num_cores,
             walltime="48:00",
-            local_directory = "/scratch/$USER/"
+            local_directory = "/scratch/$USER/",
+            log_directory=dask_log_dir
             )
     elif cluster=='local':
         cluster = LocalCluster()
-    client = Client(cluster)
-        
+    client = Client(cluster)        
     client.cluster.scale(workers)
     
     # with open(os.path.join(os.getcwd(), "dask_dashboard_link" + ".txt"), "w") as text_file:
