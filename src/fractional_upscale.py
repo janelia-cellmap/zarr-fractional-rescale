@@ -2,7 +2,7 @@ from dask.distributed import Client, wait, LocalCluster
 import zarr
 from dask.array.core import slices_from_chunks, normalize_chunks
 from numcodecs import Zstd
-from math import lcm
+import math
 from fractions import Fraction
 from typing import Tuple  
 import numpy as np
@@ -18,6 +18,13 @@ import time
 from cellmap_utils import get_multiscale_metadata
 import pint
 import logging 
+
+def is_power_of_two(n):
+    if n <= 0:
+        return False
+    log2_n = math.log2(n)
+    log2_inv_n = math.log2(1/n)
+    return math.isclose(log2_n, round(log2_n)) or math.isclose(log2_inv_n, round(log2_inv_n))
 
 def get_slices(src_arr: zarr.Array,
                    slab_src: int,
@@ -69,23 +76,24 @@ def fractional_reshape(src_arr : zarr.Array,
         dest_arr[out_slices] = out_data
     else:
         src_data = src_arr[input_slices]
-        zoomed_data = ndimage.zoom(src_data, (slab_dest/slab_src, )*3, order=interpolation_order, mode='nearest')
-        
-        # Figure out in which dimension (zoomed_data shape) != (chunksize shape)
-        padding = [not ((sl.stop - sl.start) == zoomed_dim) for sl,zoomed_dim in zip(out_slices, zoomed_data.shape)]
-        
-        # get the part of the zoomed data that has the same dimensions as out_slices
-        zoomed_data_slicing = []            
-        for padding_bool, out_slice, zoomed_dim in zip(padding, out_slices, zoomed_data.shape):
-            out_slice_dim = out_slice.stop - out_slice.start
-            if padding_bool:
-                    diff = zoomed_dim - out_slice_dim
-                    zoomed_data_slicing.append(slice(0, zoomed_dim - diff, None))                        
-            else:
-                zoomed_data_slicing.append(slice(0, out_slice_dim, None))
-                
-        out_data  = zoomed_data[tuple(zoomed_data_slicing)]
-        dest_arr[out_slices] = out_data
+        if not (src_data == 0).all():
+            zoomed_data = ndimage.zoom(src_data, (slab_dest/slab_src, )*3, order=interpolation_order, mode='nearest')
+            
+            # Figure out in which dimension (zoomed_data shape) != (chunksize shape)
+            padding = [not ((sl.stop - sl.start) == zoomed_dim) for sl,zoomed_dim in zip(out_slices, zoomed_data.shape)]
+            
+            # get the part of the zoomed data that has the same dimensions as out_slices
+            zoomed_data_slicing = []            
+            for padding_bool, out_slice, zoomed_dim in zip(padding, out_slices, zoomed_data.shape):
+                out_slice_dim = out_slice.stop - out_slice.start
+                if padding_bool:
+                        diff = zoomed_dim - out_slice_dim
+                        zoomed_data_slicing.append(slice(0, zoomed_dim - diff, None))                        
+                else:
+                    zoomed_data_slicing.append(slice(0, out_slice_dim, None))
+                    
+            out_data  = zoomed_data[tuple(zoomed_data_slicing)]
+            dest_arr[out_slices] = out_data
         
 
 
@@ -155,13 +163,13 @@ def cli(src,
     slab_dest = ratio.numerator
     slab_src = ratio.denominator
     
-    # calculate destination array shape and chunks:
-    # when downsampling:
-    if ratio < 1:
-        dest_chunks = [int(dim / slab_src) * slab_dest for dim in z_arr_src.chunks]
+    # # calculate destination array shape and chunks:
+    # # when downsampling/upsampling by a factor of 2^n:
+    if is_power_of_two(ratio):
+        dest_chunks = z_arr_src.chunks
     else:
         # TODO: proper chunkshape for upsampling, otherwise it would scale chunks by 'ratio' factor
-        dest_chunks = z_arr_src.chunks
+        dest_chunks = [int(dim / slab_src) * slab_dest for dim in z_arr_src.chunks]
     
     in_slices, out_slices = get_slices(z_arr_src, slab_src, slab_dest)
     dest_shape = tuple(dim_slice.stop for dim_slice in out_slices[-1])
