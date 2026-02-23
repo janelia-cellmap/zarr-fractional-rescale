@@ -105,7 +105,7 @@ def fractional_reshape(src_arr : zarr.Array,
 @click.option('--input_scale','-is',default="1" ,type=click.STRING, help = "Physical voxel size (integer) of the input array the needs to be rescaled")
 @click.option('--output_scale','-os',default="1" ,type=click.STRING, help = "Physical voxel size (integer) of the output rescaled array")
 @click.option('--dataset_name','-an',default="" ,type=click.STRING, help = "Name of the output array")
-@click.option('--interpolation_order', '-io', default=3, type=click.INT, help="The order of the spline interpolation, default is 3. The order has to be in the range 0-5.")
+@click.option('--interpolation_order', '-io', default=3, type=click.INT, help="The order of the spline interpolation, default is 3. The order has to be in the range 0-5. For segmentation data,set -io=0; for raw microscopy data, set -io=3.")
 @click.option('--ome_zarr', '-ome', is_flag=True, type=click.BOOL, help="Store rescaled array as an ome-ngff dataset with multiscale schema if flag is present. Otherwise, store as a zarr array")
 @click.option('--dask_log_dir','-l', type=click.STRING, help="The path of the parent directory for all LSF worker logs.  Omit if you want worker logs to be emailed to you.")
 def cli(src,
