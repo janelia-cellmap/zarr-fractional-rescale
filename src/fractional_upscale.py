@@ -71,9 +71,10 @@ def fractional_reshape(src_arr : zarr.Array,
     if all(block_start_idxs):
         src_slices = tuple(slice(sl.start - padding_width_in, sl.stop + padding_width_in, None) for sl in input_slices)
         src_data = src_arr[src_slices]
-        zoomed_data = ndimage.zoom(src_data, (slab_dest/slab_src, )*3, order=interpolation_order, mode='nearest')
-        out_data = zoomed_data[padding_width_out: -padding_width_out, padding_width_out: -padding_width_out, padding_width_out: -padding_width_out]
-        dest_arr[out_slices] = out_data
+        if not (src_data == 0).all():
+            zoomed_data = ndimage.zoom(src_data, (slab_dest/slab_src, )*3, order=interpolation_order, mode='nearest')
+            out_data = zoomed_data[padding_width_out: -padding_width_out, padding_width_out: -padding_width_out, padding_width_out: -padding_width_out]
+            dest_arr[out_slices] = out_data
     else:
         src_data = src_arr[input_slices]
         if not (src_data == 0).all():
@@ -143,14 +144,15 @@ def cli(src,
             )
     elif cluster=='local':
         cluster = LocalCluster()
-    client = Client(cluster)        
-    client.cluster.scale(workers)
-    
-    # with open(os.path.join(os.getcwd(), "dask_dashboard_link" + ".txt"), "w") as text_file:
-    #     text_file.write(str(client.dashboard_link))
-    logging.info(f'dask dashboard link: {client.dashboard_link}')
-    src_group_path, src_arr_name = os.path.split(src)
 
+    client = Client(cluster)
+    client.cluster.scale(workers)
+
+    with open(os.path.join(os.getcwd(), "dask_dashboard_link" + ".txt"), "w") as text_file:
+        text_file.write(str(client.dashboard_link))
+    logging.info(f'dask dashboard link: {client.dashboard_link}')
+
+    src_group_path, src_arr_name = os.path.split(src.rstrip('/'))
     zg = zarr.open(src_group_path, mode = 'r')
     z_arr_src = zg[src_arr_name]
     
@@ -222,8 +224,11 @@ def cli(src,
         
         futures = client.map(lambda x: fractional_reshape(z_arr_src, z_arr_dest, slab_src,  slab_dest, x, interpolation_order), part)
         result = wait(futures)
-        
-        logging.info(f'Completed {len(part)} tasks in {time.time() - start}s')
+
+        failed = [f for f in result.done if f.status == 'error']
+        if failed:
+            logging.error(f'Batch {idx+1}: {len(failed)}/{len(futures)} tasks FAILED. First error: {failed[0].exception()}')
+        logging.info(f'Completed {len(part)} tasks in {time.time() - start:.1f}s')
 
 if __name__ == '__main__':
     cli()
