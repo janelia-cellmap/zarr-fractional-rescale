@@ -109,6 +109,7 @@ def fractional_reshape(src_arr : zarr.Array,
 @click.option('--ome_zarr', '-ome', is_flag=True, type=click.BOOL, help="Store rescaled array as an ome-ngff dataset with multiscale schema if flag is present. Otherwise, store as a zarr array")
 @click.option('--dask_log_dir','-l', type=click.STRING, help="The path of the parent directory for all LSF worker logs.  Omit if you want worker logs to be emailed to you.")
 @click.option('--chunks', type=click.STRING, default=None, help="Output chunk size as comma-separated integers, e.g. '128,128,128'. Must be multiples of the output slab size for exact alignment.")
+@click.option('--project_name', '-p', type=click.STRING, default=None, help='Specify project name when running on an LSF cluster.')
 def cli(src,
         dest,
         cluster,
@@ -119,14 +120,16 @@ def cli(src,
         interpolation_order,
         ome_zarr,
         dask_log_dir,
-        chunks
+        chunks,
+        project_name
         ):
-    
-    logging.basicConfig(level=logging.INFO, 
+
+    logging.basicConfig(level=logging.INFO,
                          format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
-    if cluster=='lsf':        
+
+    if cluster=='lsf':
         num_cores = 1
+        job_extra_directives = [f'-P {project_name}'] if project_name is not None else []
         cluster = LSFCluster(
             cores=num_cores,
             processes=num_cores,
@@ -134,8 +137,9 @@ def cli(src,
             ncpus=num_cores,
             mem=15 * num_cores,
             walltime="48:00",
-            local_directory = "/scratch/$USER/",
-            log_directory=dask_log_dir
+            local_directory="/scratch/$USER/",
+            log_directory=dask_log_dir,
+            job_extra_directives=job_extra_directives
             )
     elif cluster=='local':
         cluster = LocalCluster()
