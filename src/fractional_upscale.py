@@ -28,11 +28,11 @@ def is_power_of_two(n):
 
 def get_slices(src_arr: zarr.Array,
                    slab_src: int,
-                   slab_dest: int):
+                   slab_dest: int,
+                   src_chunks=None):
     slab_count_in = slab_src
     slab_count_out = slab_dest
-    # check how many pixel_slabs are approximately in one chunk:
-    chunk_shape = src_arr.chunks
+    chunk_shape = src_chunks if src_chunks is not None else src_arr.chunks
     slices_dims = [int(dim / slab_count_in) * slab_count_in for dim in chunk_shape]
 
     # calculate input slices
@@ -108,6 +108,7 @@ def fractional_reshape(src_arr : zarr.Array,
 @click.option('--interpolation_order', '-io', default=3, type=click.INT, help="The order of the spline interpolation, default is 3. The order has to be in the range 0-5. For segmentation data,set -io=0; for raw microscopy data, set -io=3.")
 @click.option('--ome_zarr', '-ome', is_flag=True, type=click.BOOL, help="Store rescaled array as an ome-ngff dataset with multiscale schema if flag is present. Otherwise, store as a zarr array")
 @click.option('--dask_log_dir','-l', type=click.STRING, help="The path of the parent directory for all LSF worker logs.  Omit if you want worker logs to be emailed to you.")
+@click.option('--chunks', type=click.STRING, default=None, help="Output chunk size as comma-separated integers, e.g. '128,128,128'. Must be multiples of the output slab size for exact alignment.")
 def cli(src,
         dest,
         cluster,
@@ -117,7 +118,8 @@ def cli(src,
         dataset_name,
         interpolation_order,
         ome_zarr,
-        dask_log_dir
+        dask_log_dir,
+        chunks
         ):
     
     logging.basicConfig(level=logging.INFO, 
@@ -163,15 +165,27 @@ def cli(src,
     slab_dest = ratio.numerator
     slab_src = ratio.denominator
     
-    # # calculate destination array shape and chunks:
-    # # when downsampling/upsampling by a factor of 2^n:
-    if is_power_of_two(ratio):
-        dest_chunks = z_arr_src.chunks
+    # calculate destination array shape and chunks:
+    if chunks is not None:
+        dest_chunks = tuple(int(c) for c in chunks.split(','))
+        # back-calculate input chunk size that produces output slices matching dest_chunks;
+        # must be a multiple of slab_src so get_slices partitions evenly
+        src_chunks_override = tuple(int(c / slab_dest) * slab_src for c in dest_chunks)
+        adjusted_dest_chunks = tuple(s * slab_dest // slab_src for s in src_chunks_override)
+        if adjusted_dest_chunks != dest_chunks:
+            logging.warning(
+                f'Requested chunks {dest_chunks} are not multiples of slab_dest={slab_dest}; '
+                f'using adjusted chunks {adjusted_dest_chunks} for exact alignment.'
+            )
+            dest_chunks = adjusted_dest_chunks
     else:
-        # TODO: proper chunkshape for upsampling, otherwise it would scale chunks by 'ratio' factor
-        dest_chunks = [int(dim / slab_src) * slab_dest for dim in z_arr_src.chunks]
-    
-    in_slices, out_slices = get_slices(z_arr_src, slab_src, slab_dest)
+        src_chunks_override = None
+        if is_power_of_two(ratio):
+            dest_chunks = z_arr_src.chunks
+        else:
+            dest_chunks = tuple(int(dim / slab_src) * slab_dest for dim in z_arr_src.chunks)
+
+    in_slices, out_slices = get_slices(z_arr_src, slab_src, slab_dest, src_chunks_override)
     dest_shape = tuple(dim_slice.stop for dim_slice in out_slices[-1])
     
     logging.info(f'rescaled array chunk shape: {dest_chunks}')
