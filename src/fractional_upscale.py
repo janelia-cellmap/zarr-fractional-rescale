@@ -28,11 +28,11 @@ def is_power_of_two(n):
 
 def get_slices(src_arr: zarr.Array,
                    slab_src: int,
-                   slab_dest: int):
+                   slab_dest: int,
+                   src_chunks=None):
     slab_count_in = slab_src
     slab_count_out = slab_dest
-    # check how many pixel_slabs are approximately in one chunk:
-    chunk_shape = src_arr.chunks
+    chunk_shape = src_chunks if src_chunks is not None else src_arr.chunks
     slices_dims = [int(dim / slab_count_in) * slab_count_in for dim in chunk_shape]
 
     # calculate input slices
@@ -71,9 +71,10 @@ def fractional_reshape(src_arr : zarr.Array,
     if all(block_start_idxs):
         src_slices = tuple(slice(sl.start - padding_width_in, sl.stop + padding_width_in, None) for sl in input_slices)
         src_data = src_arr[src_slices]
-        zoomed_data = ndimage.zoom(src_data, (slab_dest/slab_src, )*3, order=interpolation_order, mode='nearest')
-        out_data = zoomed_data[padding_width_out: -padding_width_out, padding_width_out: -padding_width_out, padding_width_out: -padding_width_out]
-        dest_arr[out_slices] = out_data
+        if not (src_data == 0).all():
+            zoomed_data = ndimage.zoom(src_data, (slab_dest/slab_src, )*3, order=interpolation_order, mode='nearest')
+            out_data = zoomed_data[padding_width_out: -padding_width_out, padding_width_out: -padding_width_out, padding_width_out: -padding_width_out]
+            dest_arr[out_slices] = out_data
     else:
         src_data = src_arr[input_slices]
         if not (src_data == 0).all():
@@ -105,9 +106,11 @@ def fractional_reshape(src_arr : zarr.Array,
 @click.option('--input_scale','-is',default="1" ,type=click.STRING, help = "Physical voxel size (integer) of the input array the needs to be rescaled")
 @click.option('--output_scale','-os',default="1" ,type=click.STRING, help = "Physical voxel size (integer) of the output rescaled array")
 @click.option('--dataset_name','-an',default="" ,type=click.STRING, help = "Name of the output array")
-@click.option('--interpolation_order', '-io', default=3, type=click.INT, help="The order of the spline interpolation, default is 3. The order has to be in the range 0-5.")
+@click.option('--interpolation_order', '-io', default=3, type=click.INT, help="The order of the spline interpolation, default is 3. The order has to be in the range 0-5. For segmentation data,set -io=0; for raw microscopy data, set -io=3.")
 @click.option('--ome_zarr', '-ome', is_flag=True, type=click.BOOL, help="Store rescaled array as an ome-ngff dataset with multiscale schema if flag is present. Otherwise, store as a zarr array")
 @click.option('--dask_log_dir','-l', type=click.STRING, help="The path of the parent directory for all LSF worker logs.  Omit if you want worker logs to be emailed to you.")
+@click.option('--chunks', type=click.STRING, default=None, help="Output chunk size as comma-separated integers, e.g. '128,128,128'. Must be multiples of the output slab size for exact alignment.")
+@click.option('--project_name', '-p', type=click.STRING, default=None, help='Specify project name when running on an LSF cluster.')
 def cli(src,
         dest,
         cluster,
@@ -117,14 +120,17 @@ def cli(src,
         dataset_name,
         interpolation_order,
         ome_zarr,
-        dask_log_dir
+        dask_log_dir,
+        chunks,
+        project_name
         ):
-    
-    logging.basicConfig(level=logging.INFO, 
+
+    logging.basicConfig(level=logging.INFO,
                          format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
-    if cluster=='lsf':        
+
+    if cluster=='lsf':
         num_cores = 1
+        job_extra_directives = [f'-P {project_name}'] if project_name is not None else []
         cluster = LSFCluster(
             cores=num_cores,
             processes=num_cores,
@@ -132,19 +138,21 @@ def cli(src,
             ncpus=num_cores,
             mem=15 * num_cores,
             walltime="48:00",
-            local_directory = "/scratch/$USER/",
-            log_directory=dask_log_dir
+            local_directory="/scratch/$USER/",
+            log_directory=dask_log_dir,
+            job_extra_directives=job_extra_directives
             )
     elif cluster=='local':
         cluster = LocalCluster()
-    client = Client(cluster)        
-    client.cluster.scale(workers)
-    
-    # with open(os.path.join(os.getcwd(), "dask_dashboard_link" + ".txt"), "w") as text_file:
-    #     text_file.write(str(client.dashboard_link))
-    logging.info(f'dask dashboard link: {client.dashboard_link}')
-    src_group_path, src_arr_name = os.path.split(src)
 
+    client = Client(cluster)
+    client.cluster.scale(workers)
+
+    with open(os.path.join(os.getcwd(), "dask_dashboard_link" + ".txt"), "w") as text_file:
+        text_file.write(str(client.dashboard_link))
+    logging.info(f'dask dashboard link: {client.dashboard_link}')
+
+    src_group_path, src_arr_name = os.path.split(src.rstrip('/'))
     zg = zarr.open(src_group_path, mode = 'r')
     z_arr_src = zg[src_arr_name]
     
@@ -163,15 +171,27 @@ def cli(src,
     slab_dest = ratio.numerator
     slab_src = ratio.denominator
     
-    # # calculate destination array shape and chunks:
-    # # when downsampling/upsampling by a factor of 2^n:
-    if is_power_of_two(ratio):
-        dest_chunks = z_arr_src.chunks
+    # calculate destination array shape and chunks:
+    if chunks is not None:
+        dest_chunks = tuple(int(c) for c in chunks.split(','))
+        # back-calculate input chunk size that produces output slices matching dest_chunks;
+        # must be a multiple of slab_src so get_slices partitions evenly
+        src_chunks_override = tuple(int(c / slab_dest) * slab_src for c in dest_chunks)
+        adjusted_dest_chunks = tuple(s * slab_dest // slab_src for s in src_chunks_override)
+        if adjusted_dest_chunks != dest_chunks:
+            logging.warning(
+                f'Requested chunks {dest_chunks} are not multiples of slab_dest={slab_dest}; '
+                f'using adjusted chunks {adjusted_dest_chunks} for exact alignment.'
+            )
+            dest_chunks = adjusted_dest_chunks
     else:
-        # TODO: proper chunkshape for upsampling, otherwise it would scale chunks by 'ratio' factor
-        dest_chunks = [int(dim / slab_src) * slab_dest for dim in z_arr_src.chunks]
-    
-    in_slices, out_slices = get_slices(z_arr_src, slab_src, slab_dest)
+        src_chunks_override = None
+        if is_power_of_two(ratio):
+            dest_chunks = z_arr_src.chunks
+        else:
+            dest_chunks = tuple(int(dim / slab_src) * slab_dest for dim in z_arr_src.chunks)
+
+    in_slices, out_slices = get_slices(z_arr_src, slab_src, slab_dest, src_chunks_override)
     dest_shape = tuple(dim_slice.stop for dim_slice in out_slices[-1])
     
     logging.info(f'rescaled array chunk shape: {dest_chunks}')
@@ -204,8 +224,11 @@ def cli(src,
         
         futures = client.map(lambda x: fractional_reshape(z_arr_src, z_arr_dest, slab_src,  slab_dest, x, interpolation_order), part)
         result = wait(futures)
-        
-        logging.info(f'Completed {len(part)} tasks in {time.time() - start}s')
+
+        failed = [f for f in result.done if f.status == 'error']
+        if failed:
+            logging.error(f'Batch {idx+1}: {len(failed)}/{len(futures)} tasks FAILED. First error: {failed[0].exception()}')
+        logging.info(f'Completed {len(part)} tasks in {time.time() - start:.1f}s')
 
 if __name__ == '__main__':
     cli()
